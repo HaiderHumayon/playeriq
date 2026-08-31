@@ -24,9 +24,9 @@ PlayerIQ turns **20-30 minutes of subjective manual performance review** into a 
 |---|---|---|
 | API endpoints | `app/main.py` | Implemented |
 | Database | `app/database.py`, `app/models.py` | Implemented |
-| Authentication | pp/auth.py, /auth/*, protected performance routes | Implemented |
-| LLM integration | pp/llm.py, POST /analysis/performance | Implemented |
-| Caching | planned M3 | Planned |
+| Authentication | `app/auth.py`, `/auth/*`, protected performance routes | Implemented |
+| LLM integration | `app/llm.py`, `POST /analysis/performance` | Implemented |
+| Caching | pp/cache.py, PostgreSQL i_analyses cache | Implemented |
 | PDF reporting | planned M3 | Planned |
 
 No swaps are planned.
@@ -163,3 +163,27 @@ The cost estimate uses the model's documented per-token list prices. A free-tier
 `GET /analysis/usage` returns the current player's recent usage logs.
 
 The Groq API key is read from `.env` only and is never committed.
+## Persistent AI caching
+
+PlayerIQ avoids repeated LLM calls when the analysis inputs have not changed.
+
+Before calling Groq, the backend creates a SHA-256 cache key from:
+
+- the authenticated player
+- the requested analysis window
+- every performance record supplied to the analysis
+- the selected LLM model
+- the prompt version
+
+The cache is stored in PostgreSQL with the validated AI analysis. An identical request returns the existing analysis with:
+
+- `cached: true`
+- `provider_call_made: false`
+- the same `analysis_id`
+- the same `cache_key`
+
+No new LLM usage row is created on a cache hit.
+
+If the player's performance data, model, prompt version, or analysis window changes, the hash changes and PlayerIQ creates a fresh analysis.
+
+This makes caching persistent across API/container restarts rather than relying on process memory.

@@ -56,6 +56,15 @@ class AIAnalysis(Base):
     metrics_snapshot: Mapped[dict] = mapped_column(JSON)
     analysis: Mapped[dict] = mapped_column(JSON)
     model: Mapped[str] = mapped_column(String(120))
+    cache_key: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+    usage_log_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

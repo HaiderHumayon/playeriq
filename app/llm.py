@@ -12,6 +12,7 @@ from app.schemas import PerformanceAnalysis
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 DEFAULT_MODEL = "openai/gpt-oss-120b"
+PROMPT_VERSION = "playeriq-performance-analyst-v1"
 
 # Current public list pricing for openai/gpt-oss-120b on Groq:
 # input $0.15 / 1M tokens; output $0.60 / 1M tokens.
@@ -34,7 +35,7 @@ class Usage:
     estimated_provider_cost_usd: float
 
 
-def _model() -> str:
+def model_name() -> str:
     return os.getenv("GROQ_MODEL", DEFAULT_MODEL)
 
 
@@ -124,7 +125,7 @@ def analyze_performance(
     player_name: str,
     metrics: dict,
 ) -> tuple[PerformanceAnalysis, Usage]:
-    model = _model()
+    model = model_name()
 
     system = (
         "You are PlayerIQ's football performance analyst. "
@@ -176,7 +177,7 @@ def analyze_performance(
         headers={
             "Authorization": f"Bearer {_api_key()}",
             "Content-Type": "application/json",
-            "User-Agent": "PlayerIQ-Capstone/0.4",
+            "User-Agent": "PlayerIQ-Capstone/0.5",
         },
         method="POST",
     )

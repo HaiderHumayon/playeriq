@@ -13,13 +13,20 @@ from app.auth import (
     hash_password,
     verify_password,
 )
+from app.cache import build_analysis_cache_key
 from app.database import Base, engine, get_db
-from app.llm import LLMError, analyze_performance
+from app.llm import (
+    LLMError,
+    PROMPT_VERSION,
+    analyze_performance,
+    model_name,
+)
 from app.models import AIAnalysis, LLMUsageLog, Performance, User
 from app.schemas import (
     AnalysisResponse,
     AnalyticsSummary,
     LLMUsageOut,
+    PerformanceAnalysis,
     PerformanceCreate,
     PerformanceOut,
     RegisterRequest,
@@ -52,6 +59,34 @@ def apply_m3_schema() -> None:
             )
         )
 
+        # M3.4 evolves analyses created before caching without deleting them.
+        connection.execute(
+            text(
+                "ALTER TABLE ai_analyses "
+                "ADD COLUMN IF NOT EXISTS cache_key VARCHAR(64)"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE ai_analyses "
+                "ADD COLUMN IF NOT EXISTS usage_log_id INTEGER"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS "
+                "ix_ai_analyses_cache_key ON ai_analyses (cache_key)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "uq_ai_analysis_user_cache_key "
+                "ON ai_analyses (user_id, cache_key) "
+                "WHERE cache_key IS NOT NULL"
+            )
+        )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,7 +101,7 @@ app = FastAPI(
         "Football performance intelligence built around measurable evidence, "
         "not vague labels."
     ),
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -222,6 +257,43 @@ def ai_performance_analysis(
         )
 
     metrics = build_summary(rows, window)
+    selected_model = model_name()
+
+    cache_key = build_analysis_cache_key(
+        player_name=current_user.player_name,
+        rows=rows,
+        window=window,
+        model=selected_model,
+        prompt_version=PROMPT_VERSION,
+    )
+
+    cached_row = db.scalar(
+        select(AIAnalysis).where(
+            AIAnalysis.user_id == current_user.id,
+            AIAnalysis.cache_key == cache_key,
+        )
+    )
+
+    if cached_row is not None:
+        usage_row = None
+        if cached_row.usage_log_id is not None:
+            usage_row = db.get(
+                LLMUsageLog,
+                cached_row.usage_log_id,
+            )
+
+        return AnalysisResponse(
+            analysis_id=cached_row.id,
+            window_size=cached_row.window_size,
+            metrics=cached_row.metrics_snapshot,
+            analysis=PerformanceAnalysis.model_validate(
+                cached_row.analysis
+            ),
+            usage=usage_row,
+            cached=True,
+            provider_call_made=False,
+            cache_key=cache_key,
+        )
 
     try:
         analysis, usage = analyze_performance(
@@ -251,9 +323,46 @@ def ai_performance_analysis(
         metrics_snapshot=metrics,
         analysis=analysis.model_dump(mode="json"),
         model=usage.model,
+        cache_key=cache_key,
+        usage_log_id=usage_row.id,
     )
     db.add(analysis_row)
-    db.commit()
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent identical request may have populated the same unique
+        # cache key first. Roll back and safely return that completed cache.
+        db.rollback()
+        winner = db.scalar(
+            select(AIAnalysis).where(
+                AIAnalysis.user_id == current_user.id,
+                AIAnalysis.cache_key == cache_key,
+            )
+        )
+        if winner is None:
+            raise
+
+        winner_usage = None
+        if winner.usage_log_id is not None:
+            winner_usage = db.get(
+                LLMUsageLog,
+                winner.usage_log_id,
+            )
+
+        return AnalysisResponse(
+            analysis_id=winner.id,
+            window_size=winner.window_size,
+            metrics=winner.metrics_snapshot,
+            analysis=PerformanceAnalysis.model_validate(
+                winner.analysis
+            ),
+            usage=winner_usage,
+            cached=True,
+            provider_call_made=False,
+            cache_key=cache_key,
+        )
+
     db.refresh(usage_row)
     db.refresh(analysis_row)
 
@@ -263,6 +372,9 @@ def ai_performance_analysis(
         metrics=metrics,
         analysis=analysis,
         usage=usage_row,
+        cached=False,
+        provider_call_made=True,
+        cache_key=cache_key,
     )
 
 

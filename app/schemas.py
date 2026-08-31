@@ -129,4 +129,7 @@ class AnalysisResponse(BaseModel):
     window_size: int
     metrics: AnalyticsSummary
     analysis: PerformanceAnalysis
-    usage: LLMUsageOut
+    usage: LLMUsageOut | None
+    cached: bool
+    provider_call_made: bool
+    cache_key: str
