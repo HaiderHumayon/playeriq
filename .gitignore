@@ -3,4 +3,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-reports/*.pdf
+*.db
+*.sqlite
+*.sqlite3
+reports/
+.DS_Store
