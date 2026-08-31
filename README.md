@@ -24,7 +24,7 @@ PlayerIQ turns **20-30 minutes of subjective manual performance review** into a 
 |---|---|---|
 | API endpoints | `app/main.py` | Implemented |
 | Database | `app/database.py`, `app/models.py` | Implemented |
-| Authentication | planned M3 | Next |
+| Authentication | pp/auth.py, /auth/*, protected performance routes | Implemented |
 | LLM integration | planned M3 | Planned |
 | Caching | planned M3 | Planned |
 | PDF reporting | planned M3 | Planned |
@@ -98,3 +98,21 @@ The capstone core stays limited to five product features:
 Automated video analysis and computer-vision tracking are outside the capstone scope.
 
 See [`docs/M1-one-pager.md`](docs/M1-one-pager.md) for the full M1 plan.
+
+## Authentication
+
+PlayerIQ uses password-based accounts with signed JWT access tokens.
+
+Endpoints:
+
+- `POST /auth/register` - create a player account
+- `POST /auth/login` - log in and receive a bearer token
+- `GET /auth/me` - read the authenticated profile
+- `POST /performances` - protected; the player identity comes from the token
+- `GET /performances` - protected; returns only the current user's records
+
+Passwords are never stored directly. PlayerIQ stores a salted PBKDF2-SHA256 password hash. The JWT signing secret lives only in `.env`, which is excluded from Git.
+
+### Data isolation
+
+Every performance row is owned by a user ID. A player cannot choose another player identity in the request body, and performance queries are filtered by the authenticated user's ID. The M3 verification creates two accounts and proves that the second account cannot see the first account's performance data.

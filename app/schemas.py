@@ -1,10 +1,29 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    player_name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    email: EmailStr
+    player_name: str
+    created_at: datetime
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 class PerformanceCreate(BaseModel):
-    player_name: str = Field(min_length=1, max_length=120)
     match_date: date
     opponent: str = Field(min_length=1, max_length=120)
     position: str = Field(min_length=1, max_length=20)
@@ -26,4 +45,5 @@ class PerformanceOut(PerformanceCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    player_name: str
     created_at: datetime
