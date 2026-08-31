@@ -14,9 +14,12 @@ from app.auth import (
     verify_password,
 )
 from app.database import Base, engine, get_db
-from app.models import Performance, User
+from app.llm import LLMError, analyze_performance
+from app.models import AIAnalysis, LLMUsageLog, Performance, User
 from app.schemas import (
+    AnalysisResponse,
     AnalyticsSummary,
+    LLMUsageOut,
     PerformanceCreate,
     PerformanceOut,
     RegisterRequest,
@@ -63,7 +66,7 @@ app = FastAPI(
         "Football performance intelligence built around measurable evidence, "
         "not vague labels."
     ),
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -157,22 +160,35 @@ def list_performances(
     return list(db.scalars(statement))
 
 
-@app.get("/analytics/summary", response_model=AnalyticsSummary)
-def analytics_summary(
-    window: int = Query(default=5, ge=1, le=20),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    rows = list(
+def _performance_rows(
+    *,
+    db: Session,
+    user_id: int,
+    window: int,
+) -> list[Performance]:
+    return list(
         db.scalars(
             select(Performance)
-            .where(Performance.user_id == current_user.id)
+            .where(Performance.user_id == user_id)
             .order_by(
                 Performance.match_date.desc(),
                 Performance.id.desc(),
             )
             .limit(window * 2)
         )
+    )
+
+
+@app.get("/analytics/summary", response_model=AnalyticsSummary)
+def analytics_summary(
+    window: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = _performance_rows(
+        db=db,
+        user_id=current_user.id,
+        window=window,
     )
 
     if not rows:
@@ -182,3 +198,84 @@ def analytics_summary(
         )
 
     return build_summary(rows, window)
+
+
+@app.post("/analysis/performance", response_model=AnalysisResponse)
+def ai_performance_analysis(
+    window: int = Query(default=5, ge=3, le=10),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = _performance_rows(
+        db=db,
+        user_id=current_user.id,
+        window=window,
+    )
+
+    if len(rows) < window:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"At least {window} performances are required; "
+                f"found {len(rows)}"
+            ),
+        )
+
+    metrics = build_summary(rows, window)
+
+    try:
+        analysis, usage = analyze_performance(
+            player_name=current_user.player_name,
+            metrics=metrics,
+        )
+    except LLMError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    usage_row = LLMUsageLog(
+        user_id=current_user.id,
+        model=usage.model,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        total_tokens=usage.total_tokens,
+        estimated_provider_cost_usd=usage.estimated_provider_cost_usd,
+    )
+    db.add(usage_row)
+    db.flush()
+
+    analysis_row = AIAnalysis(
+        user_id=current_user.id,
+        window_size=window,
+        metrics_snapshot=metrics,
+        analysis=analysis.model_dump(mode="json"),
+        model=usage.model,
+    )
+    db.add(analysis_row)
+    db.commit()
+    db.refresh(usage_row)
+    db.refresh(analysis_row)
+
+    return AnalysisResponse(
+        analysis_id=analysis_row.id,
+        window_size=window,
+        metrics=metrics,
+        analysis=analysis,
+        usage=usage_row,
+    )
+
+
+@app.get("/analysis/usage", response_model=list[LLMUsageOut])
+def list_llm_usage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return list(
+        db.scalars(
+            select(LLMUsageLog)
+            .where(LLMUsageLog.user_id == current_user.id)
+            .order_by(LLMUsageLog.id.desc())
+            .limit(50)
+        )
+    )

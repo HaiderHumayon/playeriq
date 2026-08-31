@@ -91,3 +91,42 @@ class AnalyticsSummary(BaseModel):
     previous: MetricSet | None
     trends: TrendSet | None
     evidence_note: str
+
+
+class EvidenceInsight(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    evidence: str = Field(min_length=1, max_length=300)
+    interpretation: str = Field(min_length=1, max_length=500)
+
+
+class TrainingPriority(BaseModel):
+    priority: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=400)
+
+
+class PerformanceAnalysis(BaseModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    strengths: list[EvidenceInsight] = Field(min_length=2, max_length=4)
+    development_areas: list[EvidenceInsight] = Field(min_length=2, max_length=4)
+    training_priorities: list[TrainingPriority] = Field(min_length=2, max_length=4)
+    confidence_note: str = Field(min_length=1, max_length=500)
+
+
+class LLMUsageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    estimated_provider_cost_usd: float
+    created_at: datetime
+
+
+class AnalysisResponse(BaseModel):
+    analysis_id: int
+    window_size: int
+    metrics: AnalyticsSummary
+    analysis: PerformanceAnalysis
+    usage: LLMUsageOut

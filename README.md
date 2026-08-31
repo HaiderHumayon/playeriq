@@ -25,7 +25,7 @@ PlayerIQ turns **20-30 minutes of subjective manual performance review** into a 
 | API endpoints | `app/main.py` | Implemented |
 | Database | `app/database.py`, `app/models.py` | Implemented |
 | Authentication | pp/auth.py, /auth/*, protected performance routes | Implemented |
-| LLM integration | planned M3 | Planned |
+| LLM integration | pp/llm.py, POST /analysis/performance | Implemented |
 | Caching | planned M3 | Planned |
 | PDF reporting | planned M3 | Planned |
 
@@ -131,3 +131,35 @@ PlayerIQ calculates football KPIs in Python before any AI is involved.
 The endpoint is authenticated and only uses the logged-in player's records.
 
 **Evidence rule:** PlayerIQ's LLM will later interpret these verified statistics. It will not be trusted to calculate them.
+## AI Performance Analyst
+
+`POST /analysis/performance?window=5` is PlayerIQ's narrow LLM feature.
+
+The backend first calculates the verified football KPIs with deterministic Python. Only then does the LLM interpret those numbers. The model is instructed not to invent match events, injuries, medical conclusions, scouting claims, or unsupported metrics.
+
+The response is constrained to a structured schema and then validated again with Pydantic before it can be saved or returned.
+
+The output contains:
+
+- evidence-backed summary
+- 2-4 strengths with numerical evidence
+- 2-4 development areas with numerical evidence
+- 2-4 training priorities
+- confidence/data-limit note
+
+### LLM usage and cost log
+
+Each successful AI request stores:
+
+- provider model
+- prompt tokens
+- completion tokens
+- total tokens
+- estimated provider-equivalent USD cost
+- timestamp
+
+The cost estimate uses the model's documented per-token list prices. A free-tier account may still have an actual billed amount of $0.
+
+`GET /analysis/usage` returns the current player's recent usage logs.
+
+The Groq API key is read from `.env` only and is never committed.
