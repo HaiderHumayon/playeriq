@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -22,6 +22,7 @@ from app.llm import (
     model_name,
 )
 from app.models import AIAnalysis, LLMUsageLog, Performance, User
+from app.reports import build_performance_report
 from app.schemas import (
     AnalysisResponse,
     AnalyticsSummary,
@@ -58,8 +59,6 @@ def apply_m3_schema() -> None:
                 "ALTER COLUMN user_id SET NOT NULL"
             )
         )
-
-        # M3.4 evolves analyses created before caching without deleting them.
         connection.execute(
             text(
                 "ALTER TABLE ai_analyses "
@@ -101,7 +100,7 @@ app = FastAPI(
         "Football performance intelligence built around measurable evidence, "
         "not vague labels."
     ),
-    version="0.5.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -214,6 +213,38 @@ def _performance_rows(
     )
 
 
+def _analysis_cache_context(
+    *,
+    db: Session,
+    current_user: User,
+    window: int,
+) -> tuple[list[Performance], dict, str]:
+    rows = _performance_rows(
+        db=db,
+        user_id=current_user.id,
+        window=window,
+    )
+
+    if len(rows) < window:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"At least {window} performances are required; "
+                f"found {len(rows)}"
+            ),
+        )
+
+    metrics = build_summary(rows, window)
+    cache_key = build_analysis_cache_key(
+        player_name=current_user.player_name,
+        rows=rows,
+        window=window,
+        model=model_name(),
+        prompt_version=PROMPT_VERSION,
+    )
+    return rows, metrics, cache_key
+
+
 @app.get("/analytics/summary", response_model=AnalyticsSummary)
 def analytics_summary(
     window: int = Query(default=5, ge=1, le=20),
@@ -241,30 +272,10 @@ def ai_performance_analysis(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    rows = _performance_rows(
+    _, metrics, cache_key = _analysis_cache_context(
         db=db,
-        user_id=current_user.id,
+        current_user=current_user,
         window=window,
-    )
-
-    if len(rows) < window:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"At least {window} performances are required; "
-                f"found {len(rows)}"
-            ),
-        )
-
-    metrics = build_summary(rows, window)
-    selected_model = model_name()
-
-    cache_key = build_analysis_cache_key(
-        player_name=current_user.player_name,
-        rows=rows,
-        window=window,
-        model=selected_model,
-        prompt_version=PROMPT_VERSION,
     )
 
     cached_row = db.scalar(
@@ -331,8 +342,6 @@ def ai_performance_analysis(
     try:
         db.commit()
     except IntegrityError:
-        # A concurrent identical request may have populated the same unique
-        # cache key first. Roll back and safely return that completed cache.
         db.rollback()
         winner = db.scalar(
             select(AIAnalysis).where(
@@ -390,4 +399,54 @@ def list_llm_usage(
             .order_by(LLMUsageLog.id.desc())
             .limit(50)
         )
+    )
+
+
+@app.get("/reports/performance.pdf")
+def performance_pdf_report(
+    window: int = Query(default=5, ge=3, le=10),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _, _, cache_key = _analysis_cache_context(
+        db=db,
+        current_user=current_user,
+        window=window,
+    )
+
+    cached_row = db.scalar(
+        select(AIAnalysis).where(
+            AIAnalysis.user_id == current_user.id,
+            AIAnalysis.cache_key == cache_key,
+        )
+    )
+
+    if cached_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "No current AI analysis exists for this performance data. "
+                "Run POST /analysis/performance first."
+            ),
+        )
+
+    analysis = PerformanceAnalysis.model_validate(
+        cached_row.analysis
+    )
+
+    pdf_bytes = build_performance_report(
+        player_name=current_user.player_name,
+        metrics=cached_row.metrics_snapshot,
+        analysis=analysis.model_dump(mode="json"),
+        window=window,
+    )
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                'attachment; filename="playeriq-performance-report.pdf"'
+            )
+        },
     )
