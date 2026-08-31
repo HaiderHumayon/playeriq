@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.analytics import build_summary
 from app.auth import (
     create_access_token,
     get_current_user,
@@ -15,6 +16,7 @@ from app.auth import (
 from app.database import Base, engine, get_db
 from app.models import Performance, User
 from app.schemas import (
+    AnalyticsSummary,
     PerformanceCreate,
     PerformanceOut,
     RegisterRequest,
@@ -24,9 +26,6 @@ from app.schemas import (
 
 
 def apply_m3_schema() -> None:
-    # M2 already proved persistence. M3 introduces ownership. create_all creates
-    # the new users table, while these statements safely evolve the existing
-    # performances table made by M2.
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -40,9 +39,6 @@ def apply_m3_schema() -> None:
                 "ix_performances_user_id ON performances (user_id)"
             )
         )
-        # The one M2 walking-skeleton row predates authentication and therefore
-        # has no owner. Remove only ownerless legacy rows before enforcing the
-        # invariant for all future data.
         connection.execute(
             text("DELETE FROM performances WHERE user_id IS NULL")
         )
@@ -67,7 +63,7 @@ app = FastAPI(
         "Football performance intelligence built around measurable evidence, "
         "not vague labels."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -159,3 +155,30 @@ def list_performances(
         )
     )
     return list(db.scalars(statement))
+
+
+@app.get("/analytics/summary", response_model=AnalyticsSummary)
+def analytics_summary(
+    window: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = list(
+        db.scalars(
+            select(Performance)
+            .where(Performance.user_id == current_user.id)
+            .order_by(
+                Performance.match_date.desc(),
+                Performance.id.desc(),
+            )
+            .limit(window * 2)
+        )
+    )
+
+    if not rows:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No performance data available for analysis",
+        )
+
+    return build_summary(rows, window)

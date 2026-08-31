@@ -116,3 +116,18 @@ Passwords are never stored directly. PlayerIQ stores a salted PBKDF2-SHA256 pass
 ### Data isolation
 
 Every performance row is owned by a user ID. A player cannot choose another player identity in the request body, and performance queries are filtered by the authenticated user's ID. The M3 verification creates two accounts and proves that the second account cannot see the first account's performance data.
+## Performance intelligence
+
+PlayerIQ calculates football KPIs in Python before any AI is involved.
+
+`GET /analytics/summary?window=5` compares the latest performance window with the previous window and returns:
+
+- minutes, goals, assists, and total goal contributions
+- shots, key passes, tackles, and interceptions
+- average match rating and average RPE
+- goals, assists, goal contributions, shots, key passes, tackles, and interceptions per 90
+- measurable trend deltas for average rating, goal contributions per 90, key passes per 90, and tackles per 90
+
+The endpoint is authenticated and only uses the logged-in player's records.
+
+**Evidence rule:** PlayerIQ's LLM will later interpret these verified statistics. It will not be trusted to calculate them.

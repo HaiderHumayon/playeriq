@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -47,3 +48,46 @@ class PerformanceOut(PerformanceCreate):
     id: int
     player_name: str
     created_at: datetime
+
+
+class MetricSet(BaseModel):
+    matches: int
+    minutes: int
+    goals: int
+    assists: int
+    goal_contributions: int
+    shots: int
+    key_passes: int
+    tackles: int
+    interceptions: int
+    average_rating: float
+    average_rpe: float
+    goals_per_90: float
+    assists_per_90: float
+    goal_contributions_per_90: float
+    shots_per_90: float
+    key_passes_per_90: float
+    tackles_per_90: float
+    interceptions_per_90: float
+
+
+class TrendValue(BaseModel):
+    current: float
+    previous: float
+    change: float
+    direction: Literal["up", "down", "flat"]
+
+
+class TrendSet(BaseModel):
+    average_rating: TrendValue
+    goal_contributions_per_90: TrendValue
+    key_passes_per_90: TrendValue
+    tackles_per_90: TrendValue
+
+
+class AnalyticsSummary(BaseModel):
+    window_size: int
+    current: MetricSet
+    previous: MetricSet | None
+    trends: TrendSet | None
+    evidence_note: str
